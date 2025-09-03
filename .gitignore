@@ -1,0 +1,33 @@
+.gigaide
+.idea
+.vscode/
+*.iml
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+pnpm-lock.yaml
+yarn.lock
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.poetry/
+
+# Flutter/Dart
+.dart_tool/
+.buildlog/
+.packages
+pubspec.lock
+build/
+android/.gradle/
+android/app/build/
+ios/Pods/
+ios/.symlinks/
+
+# Misc
+.env
+.DS_Store
