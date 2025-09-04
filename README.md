@@ -20,3 +20,16 @@
 Собрать образ локально:
 ```bash
 docker build -t devbox:latest .
+```
+## Запуск
+```bash
+#Windows
+.\dev.ps1 dev      # запустить контейнер в папке проекта
+.\dev.ps1 dev-dood # то же самое, но с доступом к docker демону хоста
+.\dev.ps1 dind     # поднять изолированный docker-daemon (DinD)
+
+#linux и macos
+make dev           # запустить контейнер в папке проекта
+make dev-dood      # то же самое, но с доступом к docker демону хоста
+make dind          # поднять изолированный docker-daemon (DinD)
+```

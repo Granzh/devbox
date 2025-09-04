@@ -3,6 +3,9 @@
 .vscode/
 *.iml
 
+# Docker
+.dev_ownership_checked
+
 # Node
 node_modules/
 dist/
