@@ -1,16 +1,18 @@
 SHELL := /bin/bash
-IMAGE ?= ghcr.io/<org>/<repo>:py-ts-flutter-2025.09
+IMAGE ?= devbox:latest
 HOME_VOL ?= devbox-home
 
--include .devbox.env
+SSH_AGENT_FLAGS :=
+ifneq ($(SSH_AUTH_SOCK),)
+  SSH_AGENT_FLAGS := -e SSH_AUTH_SOCK=/ssh-agent -v $(SSH_AUTH_SOCK):/ssh-agent
+endif
 
 .PHONY: dev dev-dood dind
 
 dev:
 	@docker run --rm -it \
 		-e UID=$$(id -u) -e GID=$$(id -g) \
-		-e SSH_AUTH_SOCK=/ssh-agent \
-		-v $$SSH_AUTH_SOCK:/ssh-agent \
+		$(SSH_AGENT_FLAGS) \
 		-v $$(pwd):/work \
 		-v $(HOME_VOL):/home/dev \
 		--add-host host.docker.internal:host-gateway \
@@ -20,8 +22,7 @@ dev:
 dev-dood:
 	@docker run --rm -it \
 		-e UID=$$(id -u) -e GID=$$(id -g) \
-		-e SSH_AUTH_SOCK=/ssh-agent \
-		-v $$SSH_AUTH_SOCK:/ssh-agent \
+		$(SSH_AGENT_FLAGS) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v $$(pwd):/work \
 		-v $(HOME_VOL):/home/dev \
@@ -35,3 +36,4 @@ dind:
 		-p 2375:2375 -e DOCKER_TLS_CERTDIR= \
 		-v devbox-dind-storage:/var/lib/docker docker:26-dind
 	@echo "DinD up. Use inside dev container: export DOCKER_HOST=tcp://host.docker.internal:2375"
+

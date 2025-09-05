@@ -7,8 +7,7 @@ RUN apt-get update && apt-get install -y \
     openssh-client sudo bash-completion wget gnupg \
     python3 python3-venv python3-pip python3-dev \
     openjdk-17-jdk \
-    gosu zsh fonts-powerline \
-    build-essential \
+    gosu zsh \
   && rm -rf /var/lib/apt/lists/*
 
 # Пользователь "dev" (UID/GID подстроим в entrypoint)
