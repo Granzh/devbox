@@ -39,7 +39,6 @@ out/
 .dart_tool/
 .packages
 .pub-cache/
-build/
 android/.gradle/
 android/app/build/
 ios/Pods/
