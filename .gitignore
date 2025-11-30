@@ -34,3 +34,6 @@ ios/.symlinks/
 # Misc
 .env
 .DS_Store
+
+# Competitive Programming - игнорируем все файлы контестов
+contests/
