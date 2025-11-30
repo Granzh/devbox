@@ -12,12 +12,20 @@ if ($env:SSH_AUTH_SOCK) {
     $sshAgentMount = "-e SSH_AUTH_SOCK=/ssh-agent -v ${env:SSH_AUTH_SOCK}:/ssh-agent"
 }
 
+# Прокидываем .gitconfig для git коммитов и пушей из контейнера
+$gitConfigMount = ""
+$gitConfigPath = Join-Path $env:USERPROFILE ".gitconfig"
+if (Test-Path $gitConfigPath) {
+    $gitConfigMount = "-v ${gitConfigPath}:/home/dev/.gitconfig:ro"
+}
+
 switch ($Command)
 {
     "dev" {
         docker run --rm -it `
           -e UID=1000 -e GID=1000 `
           $sshAgentMount `
+          $gitConfigMount `
           -v ${PWD}:/work `
           -v ${HOME_VOL}:/home/dev `
           --add-host host.docker.internal:host-gateway `
@@ -28,6 +36,7 @@ switch ($Command)
         docker run --rm -it `
           -e UID=1000 -e GID=1000 `
           $sshAgentMount `
+          $gitConfigMount `
           -v /var/run/docker.sock:/var/run/docker.sock `
           -v ${PWD}:/work `
           -v ${HOME_VOL}:/home/dev `
