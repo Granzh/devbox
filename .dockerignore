@@ -56,3 +56,6 @@ tmp/
 # Docker
 docker-compose.override.yml
 .dockerignore
+
+# Competitive Programming - не копируем контесты в образ
+contests/
