@@ -5,18 +5,19 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      curl wget git unzip zip ca-certificates gnupg lsb-release \
-      sudo bash-completion openssh-client \
-      build-essential pkg-config \
-      python3 python3-venv python3-pip python3-dev \
-      openjdk-17-jdk \
-      gosu zsh \
+    curl wget git unzip zip ca-certificates gnupg lsb-release \
+    sudo bash-completion openssh-client \
+    build-essential pkg-config \
+    python3 python3-venv python3-pip python3-dev \
+    openjdk-17-jdk \
+    gosu zsh \
+    tzdata \
     ; \
     rm -rf /var/lib/apt/lists/*
 
 # Пользователь dev (UID/GID подгоняем в entrypoint)
 RUN groupadd -g 1000 dev && useradd -m -s /bin/bash -u 1000 -g 1000 dev \
- && usermod -aG sudo dev && echo "%sudo ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    && usermod -aG sudo dev && echo "%sudo ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER dev
 WORKDIR /work
@@ -57,13 +58,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      build-essential gdb pkg-config \
-      curl wget ca-certificates gnupg lsb-release software-properties-common \
-      git python3 python3-pip \
-      cmake \
-      valgrind \
-      vim neovim \
-      libboost-all-dev \
+    build-essential gdb pkg-config \
+    curl wget ca-certificates gnupg lsb-release software-properties-common \
+    git python3 python3-pip \
+    cmake \
+    valgrind \
+    vim neovim \
+    libboost-all-dev \
     ; \
     rm -rf /var/lib/apt/lists/*
 
@@ -72,10 +73,10 @@ RUN set -eux; \
     install -m 0755 -d /usr/share/keyrings; \
     wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor >/usr/share/keyrings/llvm.gpg; \
     echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-15 main" \
-      >/etc/apt/sources.list.d/llvm15.list; \
+    >/etc/apt/sources.list.d/llvm15.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      clang-15 clang-tools-15 clang-tidy-15 clang-format-15 lldb-15 lld-15 \
+    clang-15 clang-tools-15 clang-tidy-15 clang-format-15 lldb-15 lld-15 \
     ; \
     rm -rf /var/lib/apt/lists/*; \
     update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 150; \
