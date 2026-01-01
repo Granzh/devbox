@@ -2,6 +2,8 @@
 .idea
 .vscode/
 *.iml
+deadlines telegram bot/*
+contest/*
 
 # Docker
 .dev_ownership_checked
