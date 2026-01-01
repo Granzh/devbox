@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  dev:
+    build: .
+    volumes:
+      - .:/work
+    ports:
+      - "2222:22"
+    environment:
+      - UID=${UID:-1000}
+      - GID=${GID:-1000}

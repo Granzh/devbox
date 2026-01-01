@@ -22,6 +22,8 @@
 Собрать образ локально:
 ```bash
 docker build -t devbox:latest .
+# или
+docker compose build
 ```
 ## Запуск
 ```bash
@@ -34,6 +36,9 @@ docker build -t devbox:latest .
 make dev           # запустить контейнер в папке проекта
 make dev-dood      # то же самое, но с доступом к docker демону хоста
 make dind          # поднять изолированный docker-daemon (DinD)
+
+#Подключение к docker как к удаленной машине
+docker compose up -d
 ```
 
 ---

@@ -6,7 +6,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
     curl wget git unzip zip ca-certificates gnupg lsb-release \
-    sudo bash-completion openssh-client \
+    sudo bash-completion openssh-client openssh-server \
     build-essential pkg-config \
     python3 python3-venv python3-pip python3-dev \
     openjdk-17-jdk \
@@ -49,7 +49,6 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
 # COPY --chown=dev:dev .zshrc /home/dev/.zshrc
 
 ENV SHELL=/usr/bin/zsh
-CMD ["zsh"]
 
 # --- C/C++ toolchain, LLVM 15, Valgrind, CMake, cppcheck 2.7, editors ---
 USER root
@@ -97,8 +96,21 @@ RUN set -eux; \
 
 SHELL ["/bin/sh", "-c"]
 
+USER root
+
+RUN mkdir -p /var/run/sshd && \
+    sed -i 's/^#\?UsePAM .*/UsePAM no/' /etc/ssh/sshd_config && \
+    sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config && \
+    echo "dev:dev" | chpasswd
+
+
+
 # entrypoint для подстройки UID/GID и входа как dev
 WORKDIR /work
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+EXPOSE 22
+CMD []
