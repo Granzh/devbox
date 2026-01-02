@@ -4,8 +4,16 @@ services:
     build: .
     volumes:
       - .:/work
+      - ${SSH_AUTH_SOCK}:${SSH_AUTH_SOCK}
+      - cargo-cache:/usr/local/cargo
+      - rustup-cache:/usr/local/rustup
     ports:
       - "2222:22"
     environment:
       - UID=${UID:-1000}
       - GID=${GID:-1000}
+      - SSH_AUTH_SOCK=${SSH_AUTH_SOCK}
+
+volumes:
+  cargo-cache:
+  rustup-cache:
