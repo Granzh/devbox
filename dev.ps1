@@ -1,48 +1,13 @@
+# Kept for muscle memory: .\dev.ps1 dev | dev-dood | dind
+# Everything else lives in bin/devbox (see devbox.ps1).
 param(
-    [ValidateSet("dev","dev-dood","dind")]
+    [ValidateSet("dev", "dev-dood", "dind")]
     [string]$Command = "dev"
 )
 
-$IMAGE="devbox:latest"
-$HOME_VOL="devbox-home"
-
-# Формируем опцию для ssh-agent только если переменная есть
-$sshAgentMount = ""
-if ($env:SSH_AUTH_SOCK) {
-    $sshAgentMount = "-e SSH_AUTH_SOCK=/ssh-agent -v ${env:SSH_AUTH_SOCK}:/ssh-agent"
+switch ($Command) {
+    "dev"      { & "$PSScriptRoot\devbox.ps1" shell }
+    "dev-dood" { & "$PSScriptRoot\devbox.ps1" shell --dood }
+    "dind"     { & "$PSScriptRoot\devbox.ps1" dind }
 }
-
-
-
-switch ($Command)
-{
-    "dev" {
-        docker run --rm -it `
-          -e UID=1000 -e GID=1000 `
-          $sshAgentMount `
-          $gitConfigMount `
-          -v ${PWD}:/work `
-          -v ${HOME_VOL}:/home/dev `
-          --add-host host.docker.internal:host-gateway `
-          --name devbox `
-          $IMAGE
-    }
-    "dev-dood" {
-        docker run --rm -it `
-          -e UID=1000 -e GID=1000 `
-          $sshAgentMount `
-          $gitConfigMount `
-          -v /var/run/docker.sock:/var/run/docker.sock `
-          -v ${PWD}:/work `
-          -v ${HOME_VOL}:/home/dev `
-          --add-host host.docker.internal:host-gateway `
-          --name devbox `
-          $IMAGE
-    }
-    "dind" {
-        docker rm -f devbox-dind 2> $null
-        docker run -d --privileged --name devbox-dind `
-          -p 2375:2375 -e DOCKER_TLS_CERTDIR= -v devbox-dind-storage:/var/lib/docker docker:26-dind
-        Write-Output "DinD up. Use inside dev container: export DOCKER_HOST=tcp://host.docker.internal:2375"
-    }
-}
+exit $LASTEXITCODE

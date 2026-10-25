@@ -59,3 +59,14 @@ docker-compose.override.yml
 
 # Competitive Programming - не копируем контесты в образ
 contests/
+
+# Devbox: projects live in their own repos; keep them and build junk out of the image context
+projects/
+scratch/
+target/
+venv/
+*.exe
+.pytest_cache/
+uv.lock
+pyproject.toml
+README.md

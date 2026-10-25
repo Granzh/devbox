@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# devbox - single entry point for the devbox environment.
+# Makefile, dev.ps1 and devbox.ps1 are thin wrappers around this script.
+set -euo pipefail
+
+# Git Bash would rewrite /paths in docker arguments
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" == /* ]] || src="$dir/$src"
+done
+ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
+
+PROJECTS="${DEVBOX_PROJECTS:-$ROOT/projects}"
+HOST_HOME="${DEVBOX_HOST_HOME:-$HOME}"
+CONTAINER="${DEVBOX_CONTAINER:-devbox}"
+TAG="${DEVBOX_TAG:-latest}"
+HOME_VOL=devbox-home
+# volume -> mount point inside the container
+CACHE_VOLUMES=(
+  "devbox-cargo:/home/dev/.cargo"
+  "devbox-rustup:/usr/local/rustup"
+  "devbox-go:/home/dev/go"
+  "devbox-uv-cache:/home/dev/.cache/uv"
+  "devbox-pnpm-store:/home/dev/.pnpm-store"
+)
+IMAGES=(base flutter java)
+if [ -t 0 ]; then TTY_FLAGS=(-it); else TTY_FLAGS=(-i); fi
+
+die()  { echo "devbox: $*" >&2; exit 1; }
+info() { echo "devbox: $*" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: devbox <command> [options]
+
+  shell [--image base|flutter|java] [--dood] [--here]
+                       open a shell in the devbox container (starts it if needed)
+  stop                 stop the devbox container
+  new <name> | new -n <name> [-g|--git]
+                       create projects/<name> (--git: git init -b main + .gitignore + README)
+  scratch              create projects/scratch/YYYY-MM-DD-xxxxxx and print its path
+  clean [--days N] [-y]
+                       delete scratch dirs untouched for N days (default 30)
+  prune [-y]           remove stopped containers, dangling images, build cache (never volumes)
+  doctor               check docker, images, volumes, ssh keys and git config
+  build [target...]    docker buildx bake (base first, then the rest)
+  up | down            docker compose up -d / down (sshd service on 127.0.0.1:2222)
+  dind                 start a docker-in-docker daemon container
+
+Environment: DEVBOX_TAG, DEVBOX_PROJECTS, DEVBOX_HOST_HOME, DEVBOX_CONTAINER
+EOF
+}
+
+is_windows_shell() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
+
+# path as the docker daemon should see it
+host_path() {
+  if is_windows_shell && command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+image_ref() {
+  case "$1" in
+    base|flutter|java) echo "devbox-$1:$TAG" ;;
+    llvm) die "there is no llvm image: clang-15 and cppcheck are part of the base image" ;;
+    *) die "unknown image '$1' (expected: ${IMAGES[*]})" ;;
+  esac
+}
+
+need_docker() { docker info >/dev/null 2>&1 || die "docker is not reachable (is Docker Desktop running?)"; }
+
+container_running() { [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" = true ]; }
+
+# docker run flags shared by shell and doctor: user ids, ssh, git, cache volumes
+common_flags() {
+  local uid=1000 gid=1000 v
+  if ! is_windows_shell; then uid="$(id -u)"; gid="$(id -g)"; fi
+  FLAGS=(-e "DEV_UID=$uid" -e "DEV_GID=$gid" -v "$HOME_VOL:/home/dev")
+  for v in "${CACHE_VOLUMES[@]}"; do FLAGS+=(-v "$v"); done
+  if [ -d "$HOST_HOME/.ssh" ]; then FLAGS+=(-v "$(host_path "$HOST_HOME/.ssh"):/tmp/host-ssh:ro"); fi
+  if [ -f "$HOST_HOME/.gitconfig" ]; then FLAGS+=(-v "$(host_path "$HOST_HOME/.gitconfig"):/home/dev/.gitconfig:ro"); fi
+  if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+    FLAGS+=(-e SSH_AUTH_SOCK=/ssh-agent -v "$SSH_AUTH_SOCK:/ssh-agent")
+  fi
+  FLAGS+=(--add-host host.docker.internal:host-gateway)
+}
+
+cmd_shell() {
+  local image=base dood=0 here=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --image) [ $# -ge 2 ] || die "--image needs a value"; image="$2"; shift 2 ;;
+      --image=*) image="${1#--image=}"; shift ;;
+      --dood) dood=1; shift ;;
+      --here) here=1; shift ;;
+      *) die "shell: unknown option '$1'" ;;
+    esac
+  done
+  local ref; ref="$(image_ref "$image")"
+  need_docker
+
+  if container_running; then
+    local cur; cur="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
+    if [ "$cur" != "$ref" ]; then
+      die "container '$CONTAINER' is already running image $cur; run 'devbox stop' to switch to $ref"
+    fi
+    exec docker exec "${TTY_FLAGS[@]}" -u dev -w /work "$CONTAINER" zsh
+  fi
+
+  docker image inspect "$ref" >/dev/null 2>&1 || die "image $ref not found; run 'devbox build'"
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true   # leftover stopped container with the same name
+
+  local work
+  if [ "$here" = 1 ]; then work="$(host_path "$PWD")"; else mkdir -p "$PROJECTS"; work="$(host_path "$PROJECTS")"; fi
+  common_flags
+  local extra=()
+  if [ "$dood" = 1 ]; then extra+=(-v /var/run/docker.sock:/var/run/docker.sock); fi
+  docker run -d --rm --name "$CONTAINER" --init "${FLAGS[@]}" "${extra[@]}" \
+    -v "$work:/work" "$ref" sleep infinity >/dev/null
+  exec docker exec "${TTY_FLAGS[@]}" -u dev -w /work "$CONTAINER" zsh
+}
+
+cmd_stop() {
+  need_docker
+  if container_running; then docker stop "$CONTAINER" >/dev/null && info "stopped $CONTAINER"; else info "$CONTAINER is not running"; fi
+}
+
+valid_name() {
+  [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] && [ "$1" != scratch ]
+}
+
+cmd_new() {
+  local name="" git=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n|--name) [ $# -ge 2 ] || die "$1 needs a value"; name="$2"; shift 2 ;;
+      -g|--git) git=1; shift ;;
+      -*) die "new: unknown option '$1'" ;;
+      *) [ -z "$name" ] || die "new: more than one name given"; name="$1"; shift ;;
+    esac
+  done
+  [ -n "$name" ] || die "new: project name required (devbox new -n <name> [-g])"
+  valid_name "$name" || die "invalid name '$name' (letters, digits, . _ - ; no slashes; 'scratch' is reserved)"
+  local dir="$PROJECTS/$name"
+  [ ! -e "$dir" ] || die "$dir already exists"
+  mkdir -p "$dir"
+  if [ "$git" = 1 ]; then
+    (cd "$dir" && git init -q -b main)
+    printf '%s\n' '.DS_Store' '.env' '.idea/' '.vscode/' 'node_modules/' '__pycache__/' '.venv/' 'target/' 'build/' 'dist/' > "$dir/.gitignore"
+    printf '# %s\n' "$name" > "$dir/README.md"
+  fi
+  echo "$dir"
+}
+
+cmd_scratch() {
+  local base="$PROJECTS/scratch" suffix dir
+  mkdir -p "$base"
+  suffix="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+  dir="$base/$(date +%F)-$suffix"
+  mkdir -p "$dir"
+  echo "$dir"
+}
+
+confirm() {
+  local prompt="$1" ans
+  [ -t 0 ] || die "not a terminal; pass -y to confirm"
+  read -r -p "$prompt [y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+cmd_clean() {
+  local days=30 yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days) [ $# -ge 2 ] || die "--days needs a value"; days="$2"; shift 2 ;;
+      --days=*) days="${1#--days=}"; shift ;;
+      -y|--yes) yes=1; shift ;;
+      *) die "clean: unknown option '$1'" ;;
+    esac
+  done
+  [[ "$days" =~ ^[0-9]+$ ]] || die "--days must be a non-negative integer"
+  local base="$PROJECTS/scratch" d
+  local stale=()
+  if [ -d "$base" ]; then
+    while IFS= read -r -d '' d; do
+      # stale = nothing inside (or the dir itself) changed within the last N days
+      if [ "$days" = 0 ] || [ -z "$(find "$d" -mmin "-$((days * 1440))" -print -quit)" ]; then
+        stale+=("$d")
+      fi
+    done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -print0)
+  fi
+  if [ ${#stale[@]} -eq 0 ]; then info "no scratch dirs older than $days days"; return 0; fi
+  echo "Scratch dirs untouched for $days+ days:"
+  printf '  %s\n' "${stale[@]}"
+  if [ "$yes" = 0 ] && ! confirm "Delete ${#stale[@]} dir(s)?"; then info "aborted"; return 0; fi
+  for d in "${stale[@]}"; do
+    case "$d" in "$base"/?*) rm -rf -- "$d" ;; *) die "refusing to delete $d" ;; esac
+  done
+  info "deleted ${#stale[@]} dir(s)"
+}
+
+cmd_prune() {
+  local yes=0
+  [ "${1:-}" != "-y" ] || yes=1
+  need_docker
+  echo "Will remove: stopped containers, dangling images, build cache."
+  echo "Volumes are NOT touched (devbox-home and cache volumes are safe)."
+  echo "Stopped containers:"; docker ps -a --filter status=exited --filter status=created --format '  {{.Names}} ({{.Image}})'
+  if [ "$yes" = 0 ] && ! confirm "Proceed?"; then info "aborted"; return 0; fi
+  docker container prune -f
+  docker image prune -f
+  docker builder prune -f
+  echo "Done. Volumes were not touched."
+}
+
+cmd_doctor() {
+  local fail=0 warn=0 v i ref
+  ok()   { echo "  [ ok ] $*"; }
+  bad()  { echo "  [FAIL] $*"; fail=1; }
+  meh()  { echo "  [warn] $*"; warn=1; }
+
+  echo "Docker"
+  if docker info >/dev/null 2>&1; then ok "daemon reachable ($(docker version -f '{{.Server.Version}}' 2>/dev/null))"; else bad "docker is not reachable"; exit 1; fi
+
+  echo "Images"
+  for i in "${IMAGES[@]}"; do
+    ref="devbox-$i:$TAG"
+    if docker image inspect "$ref" >/dev/null 2>&1; then ok "$ref ($(docker image inspect -f '{{.Size}}' "$ref" | awk '{printf "%.0f MB", $1/1e6}'))"
+    else meh "$ref missing (run 'devbox build')"; fi
+  done
+
+  echo "Volumes"
+  for v in "$HOME_VOL" "${CACHE_VOLUMES[@]%%:*}"; do
+    if docker volume inspect "$v" >/dev/null 2>&1; then ok "$v"; else meh "$v does not exist yet (created on first use)"; fi
+  done
+
+  echo "Host"
+  if [ -d "$HOST_HOME/.ssh" ] && compgen -G "$HOST_HOME/.ssh/id_*" >/dev/null; then ok "SSH keys in $HOST_HOME/.ssh"; else meh "no SSH keys in $HOST_HOME/.ssh"; fi
+  if [ -f "$HOST_HOME/.gitconfig" ]; then ok "$HOST_HOME/.gitconfig"; else meh "no ~/.gitconfig on host"; fi
+
+  echo "Inside the container"
+  ref="devbox-base:$TAG"
+  if docker image inspect "$ref" >/dev/null 2>&1; then
+    common_flags
+    local out
+    if out="$(docker run --rm "${FLAGS[@]}" "$ref" bash -c '
+      ls /home/dev/.ssh/id_* >/dev/null 2>&1 && echo "ssh-keys=yes" || echo "ssh-keys=no"
+      [ "$(stat -c %a /home/dev/.ssh 2>/dev/null)" = 700 ] && echo "ssh-mode=yes" || echo "ssh-mode=no"
+      n="$(git config --global user.name 2>/dev/null || true)"; [ -n "$n" ] && echo "git-name=yes" || echo "git-name=no"
+    ' 2>&1)"; then
+      case "$out" in *ssh-keys=yes*) ok "SSH keys copied to /home/dev/.ssh" ;; *) bad "no SSH keys visible in the container" ;; esac
+      case "$out" in *ssh-mode=yes*) ok "/home/dev/.ssh has mode 700" ;; *) bad "/home/dev/.ssh has wrong mode" ;; esac
+      case "$out" in *git-name=yes*) ok "git user.name visible" ;; *) bad "git config not visible in the container" ;; esac
+    else bad "could not start a test container: $out"; fi
+  else meh "skipped (devbox-base missing)"; fi
+
+  echo "Disk usage"
+  docker system df
+  echo
+  if [ $fail = 1 ]; then echo "doctor: problems found"; exit 1; fi
+  if [ $warn = 1 ]; then echo "doctor: ok with warnings"; else echo "doctor: all good"; fi
+}
+
+cmd_build() {
+  need_docker
+  cd "$ROOT"
+  # TAG is a bake variable
+  TAG="$TAG" docker buildx bake "$@"
+}
+
+compose() { (cd "$ROOT" && docker compose "$@"); }
+
+cmd_up() {
+  need_docker
+  mkdir -p "$PROJECTS"
+  export DEVBOX_SSH_DIR="${DEVBOX_SSH_DIR:-$(host_path "$HOST_HOME/.ssh")}"
+  export DEVBOX_GITCONFIG="${DEVBOX_GITCONFIG:-$(host_path "$HOST_HOME/.gitconfig")}"
+  DEVBOX_PROJECTS_DIR="$(host_path "$PROJECTS")"; export DEVBOX_PROJECTS_DIR
+  if ! is_windows_shell; then DEV_UID="$(id -u)"; DEV_GID="$(id -g)"; export DEV_UID DEV_GID; fi
+  compose up -d "$@"
+}
+
+cmd_down() { need_docker; compose down "$@"; }
+
+cmd_dind() {
+  need_docker
+  docker rm -f devbox-dind >/dev/null 2>&1 || true
+  docker run -d --privileged --name devbox-dind -p 127.0.0.1:2375:2375 -e DOCKER_TLS_CERTDIR= \
+    -v devbox-dind-storage:/var/lib/docker docker:26-dind >/dev/null
+  echo "DinD up. Inside the devbox container: export DOCKER_HOST=tcp://host.docker.internal:2375"
+}
+
+main() {
+  local cmd="${1:-help}"
+  [ $# -eq 0 ] || shift
+  case "$cmd" in
+    shell|dev) cmd_shell "$@" ;;
+    dev-dood)  cmd_shell --dood "$@" ;;
+    stop)      cmd_stop "$@" ;;
+    new)       cmd_new "$@" ;;
+    scratch)   cmd_scratch "$@" ;;
+    clean)     cmd_clean "$@" ;;
+    prune)     cmd_prune "$@" ;;
+    doctor)    cmd_doctor "$@" ;;
+    build)     cmd_build "$@" ;;
+    up)        cmd_up "$@" ;;
+    down)      cmd_down "$@" ;;
+    dind)      cmd_dind "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

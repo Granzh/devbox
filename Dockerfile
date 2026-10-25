@@ -1,117 +1,163 @@
-FROM ubuntu:22.04
+# devbox-base: shell stack, C/C++ (clang-15 + cppcheck 2.7 straight from Ubuntu apt),
+# Python + uv, Node + pnpm, Rust, Go and everyday CLI tools.
+# Flutter and Java live in docker/*.Dockerfile on top of this image.
+#
+# Toolchains are installed OUTSIDE /home/dev on purpose: /home/dev is a named
+# volume at runtime and would hide anything baked into it.
+
+ARG UBUNTU_VERSION=24.04
+ARG UV_VERSION=0.9.5
+ARG DOCKER_CLI_VERSION=27
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
+
+FROM ubuntu:${UBUNTU_VERSION}
+
 ARG DEBIAN_FRONTEND=noninteractive
+ARG NODE_VERSION=20.19.5
+ARG PNPM_VERSION=9
+ARG RUST_TOOLCHAIN=stable
+# "latest" resolves the newest stable release from go.dev (checksum from go.dev's own JSON index)
+ARG GO_VERSION=latest
+ARG JUST_VERSION=1.43.0
+ARG TZ=Europe/Moscow
 
-# Базовые утилиты
-RUN set -eux; \
+# --- apt packages (one layer, downloads cached across builds) ---
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-    curl wget git unzip zip ca-certificates gnupg lsb-release \
-    sudo bash-completion openssh-client openssh-server \
-    build-essential pkg-config \
-    python3 python3-venv python3-pip python3-dev \
-    openjdk-17-jdk \
-    libssl-dev xz-utils \
-    gosu zsh \
-    tzdata \
-    ; \
-    rm -rf /var/lib/apt/lists/*
-
-# Пользователь dev (UID/GID подгоняем в entrypoint)
-RUN groupadd -g 1000 dev && useradd -m -s /bin/bash -u 1000 -g 1000 dev \
-    && usermod -aG sudo dev && echo "%sudo ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-
-USER dev
-WORKDIR /work
-
-# Node.js + pnpm (без corepack)
-ARG NODE_VERSION=20.18.0
-RUN mkdir -p $HOME/.local && cd $HOME/.local && \
-    curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz -o node.tar.xz && \
-    tar -xJf node.tar.xz && rm node.tar.xz && mv node-v${NODE_VERSION}-linux-x64 node
-ENV PATH="/home/dev/.local/node/bin:/home/dev/.local/bin:${PATH}"
-RUN npm i -g pnpm@9 && pnpm -v && pnpm config set store-dir /home/dev/.pnpm-store
-
-# uv (Python tooling)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/home/dev/.local/bin:${PATH}"
-
-# Flutter (без Android SDK)
-ENV FLUTTER_HOME="/home/dev/.flutter"
-RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git ${FLUTTER_HOME}
-ENV PATH="${FLUTTER_HOME}/bin:${PATH}"
-
-# zsh + oh-my-zsh + powerlevel10k + плагины
-WORKDIR /home/dev
-RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
-    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ~/.oh-my-zsh/custom/themes/powerlevel10k && \
-    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions.git ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions && \
-    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
-# если у тебя в корне лежит .zshrc — скопируй:
-# COPY --chown=dev:dev .zshrc /home/dev/.zshrc
-
-ENV SHELL=/usr/bin/zsh
-
-# --- C/C++ toolchain, LLVM 15, Valgrind, CMake, cppcheck 2.7, editors ---
-USER root
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-    build-essential gdb pkg-config \
-    curl wget ca-certificates gnupg lsb-release software-properties-common \
-    git python3 python3-pip \
-    cmake \
-    valgrind \
-    vim neovim \
-    libboost-all-dev \
-    ; \
-    rm -rf /var/lib/apt/lists/*
-
-RUN set -eux; \
-    codename="$(. /etc/os-release && echo $VERSION_CODENAME)"; \
-    install -m 0755 -d /usr/share/keyrings; \
-    wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor >/usr/share/keyrings/llvm.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-15 main" \
-    >/etc/apt/sources.list.d/llvm15.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-    clang-15 clang-tools-15 clang-tidy-15 clang-format-15 lldb-15 lld-15 \
-    ; \
-    rm -rf /var/lib/apt/lists/*; \
+        ca-certificates curl wget gnupg xz-utils unzip zip sudo gosu tzdata \
+        git git-lfs openssh-client openssh-server netcat-openbsd \
+        zsh bash-completion vim neovim \
+        build-essential pkg-config gdb valgrind cmake libssl-dev \
+        clang-15 clang-tools-15 clang-tidy-15 clang-format-15 lldb-15 lld-15 cppcheck \
+        python3 python3-venv python3-pip python3-dev \
+        ripgrep fd-find fzf jq tmux bat direnv htop; \
+    ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
+    ln -sf /usr/bin/batcat /usr/local/bin/bat; \
     update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 150; \
     update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 150; \
     update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-15 150; \
-    update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-15 150
+    update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-15 150; \
+    update-alternatives --install /usr/bin/lldb lldb /usr/bin/lldb-15 150; \
+    ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime; echo "${TZ}" > /etc/timezone; \
+    git config --system --add safe.directory '*'; \
+    git lfs install --system --skip-repo
 
-ARG CPPCHECK_VERSION=2.7
+# --- user dev (UID/GID are remapped by entrypoint.sh) ---
+# Ubuntu 24.04+ ships an 'ubuntu' user on 1000:1000; drop it so dev can take that id
+# password '*' (not '!') keeps the account usable for key-only sshd logins
 RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends git g++ libpcre3-dev; \
-    rm -rf /var/lib/apt/lists/*; \
-    git clone --branch ${CPPCHECK_VERSION} --depth 1 https://github.com/danmar/cppcheck.git /tmp/cppcheck; \
-    cmake -S /tmp/cppcheck -B /tmp/cppcheck/build -DCMAKE_BUILD_TYPE=Release -DHAVE_RULES=ON; \
-    cmake --build /tmp/cppcheck/build -j"$(nproc)"; \
-    cmake --install /tmp/cppcheck/build; \
-    rm -rf /tmp/cppcheck
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi; \
+    groupadd -g 1000 dev; \
+    useradd -m -s /usr/bin/zsh -u 1000 -g 1000 dev; \
+    usermod -p '*' dev; \
+    usermod -aG sudo dev; \
+    echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/devbox; chmod 0440 /etc/sudoers.d/devbox; \
+    install -d -o dev -g dev /home/dev/.cargo /home/dev/go /home/dev/.cache /home/dev/.cache/uv /home/dev/.pnpm-store /work /opt/oh-my-zsh
 
-SHELL ["/bin/sh", "-c"]
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+# --- Node.js + pnpm (tarball is checksum-verified) ---
+RUN --mount=type=cache,target=/root/.npm \
+    set -eux; \
+    case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; *) exit 1;; esac; \
+    f="node-v${NODE_VERSION}-linux-${a}.tar.xz"; \
+    cd /tmp; \
+    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${f}"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " ${f}\$" | sha256sum -c -; \
+    tar -xJf "${f}" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "${f}" /usr/local/CHANGELOG.md /usr/local/LICENSE /usr/local/README.md; \
+    npm i -g "pnpm@${PNPM_VERSION}"; \
+    node --version; pnpm --version
+
+# --- Go (checksum comes from the go.dev download index) ---
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "${GO_VERSION}" = latest ]; then url='https://go.dev/dl/?mode=json'; sel='.[0]'; \
+    else url='https://go.dev/dl/?mode=json&include=all'; sel=".[] | select(.version==\"go${GO_VERSION}\")"; fi; \
+    meta="$(curl -fsSL "${url}" | jq -c "${sel} | .files[] | select(.os==\"linux\" and .arch==\"${arch}\" and .kind==\"archive\")")"; \
+    f="$(echo "${meta}" | jq -r .filename)"; sum="$(echo "${meta}" | jq -r .sha256)"; \
+    curl -fsSLo "/tmp/${f}" "https://go.dev/dl/${f}"; \
+    echo "${sum}  /tmp/${f}" | sha256sum -c -; \
+    tar -C /usr/local -xzf "/tmp/${f}"; rm -f "/tmp/${f}"; \
+    /usr/local/go/bin/go version
+
+# --- just (apt's version is old; release tarball is checksum-verified) ---
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in amd64) t=x86_64-unknown-linux-musl;; arm64) t=aarch64-unknown-linux-musl;; *) exit 1;; esac; \
+    f="just-${JUST_VERSION}-${t}.tar.gz"; base="https://github.com/casey/just/releases/download/${JUST_VERSION}"; \
+    cd /tmp; curl -fsSLO "${base}/${f}"; \
+    curl -fsSL "${base}/SHA256SUMS" | grep " ${f}\$" | sha256sum -c -; \
+    tar -xzf "${f}" -C /usr/local/bin just; rm -f "${f}"; just --version
+
+# --- Rust: toolchain + rustup proxies in /usr/local; CARGO_HOME moves to the volume at runtime ---
+ENV RUSTUP_HOME=/usr/local/rustup
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    set -eux; \
+    export CARGO_HOME=/usr/local/cargo; \
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_TOOLCHAIN}" -c clippy -c rustfmt -c rust-analyzer; \
+    chown -R dev:dev /usr/local/cargo /usr/local/rustup; \
+    /usr/local/cargo/bin/rustc --version
+
+# --- zsh stack, in /opt so the home volume does not hide it (entrypoint links it) ---
+USER dev
+RUN set -eux; \
+    ZSH=/opt/oh-my-zsh; \
+    git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$ZSH"; \
+    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$ZSH/custom/themes/powerlevel10k"; \
+    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions.git "$ZSH/custom/plugins/zsh-autosuggestions"; \
+    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH/custom/plugins/zsh-syntax-highlighting"; \
+    find "$ZSH" -name .git -prune -exec rm -rf {} +
 
 USER root
+COPY .zshrc /etc/skel/.zshrc
 
-RUN mkdir -p /var/run/sshd && \
-    sed -i 's/^#\?UsePAM .*/UsePAM no/' /etc/ssh/sshd_config && \
-    sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config && \
-    echo "dev:dev" | chpasswd
+# --- environment for every kind of shell (docker exec, ssh login, zsh, bash) ---
+ENV TZ=${TZ} \
+    CARGO_HOME=/home/dev/.cargo \
+    GOPATH=/home/dev/go \
+    UV_CACHE_DIR=/home/dev/.cache/uv \
+    npm_config_store_dir=/home/dev/.pnpm-store \
+    SHELL=/usr/bin/zsh \
+    PATH=/home/dev/.cargo/bin:/home/dev/go/bin:/home/dev/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}
+RUN set -eux; \
+    install -d /etc/devbox/env.d; \
+    printf '%s\n' \
+      "export TZ=${TZ}" \
+      "export RUSTUP_HOME=${RUSTUP_HOME}" \
+      "export CARGO_HOME=${CARGO_HOME}" \
+      "export GOPATH=${GOPATH}" \
+      "export UV_CACHE_DIR=${UV_CACHE_DIR}" \
+      "export npm_config_store_dir=${npm_config_store_dir}" \
+      "export PATH=${PATH}" > /etc/devbox/env.d/10-base.sh; \
+    echo 'for f in /etc/devbox/env.d/*.sh; do [ -r "$f" ] && . "$f"; done; unset f' > /etc/profile.d/00-devbox.sh; \
+    cp /etc/profile.d/00-devbox.sh /etc/zsh/zshenv; \
+    echo '. /etc/profile.d/00-devbox.sh' >> /etc/bash.bashrc
 
+# --- sshd: key-only; host keys are generated at build time ---
+RUN set -eux; \
+    install -d /run/sshd; ssh-keygen -A; \
+    grep -q '^Include /etc/ssh/sshd_config.d' /etc/ssh/sshd_config; \
+    printf '%s\n' \
+      'PasswordAuthentication no' \
+      'KbdInteractiveAuthentication no' \
+      'PubkeyAuthentication yes' \
+      'PermitRootLogin no' \
+      'UsePAM no' \
+      'AllowUsers dev' > /etc/ssh/sshd_config.d/10-devbox.conf
 
-
-# entrypoint для подстройки UID/GID и входа как dev
-WORKDIR /work
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
+WORKDIR /work
 EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD []

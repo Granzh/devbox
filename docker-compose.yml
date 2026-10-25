@@ -1,19 +1,59 @@
-version: "3.8"
+# Persistent sshd container for IDE remote access (JetBrains Gateway, VS Code Remote-SSH)
+# and for Dev Containers. Prefer `devbox up` over raw `docker compose up`: it fills in
+# the host paths below correctly on Windows/WSL/Linux.
 services:
   dev:
-    build: .
-    volumes:
-      - ./projects:/work
-      #      - ${SSH_AUTH_SOCK}:${SSH_AUTH_SOCK}
-      #      - cargo-cache:/usr/local/cargo
-      #      - rustup-cache:/usr/local/rustup
+    image: devbox-base:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: devbox-sshd
+    init: true
     ports:
-      - "2222:22"
+      # loopback only; key-based login, no passwords
+      - "127.0.0.1:2222:22"
     environment:
-      - UID=${UID:-1000}
-      - GID=${GID:-1000}
-#      - SSH_AUTH_SOCK=${SSH_AUTH_SOCK}
+      - DEV_UID=${DEV_UID:-1000}
+      - DEV_GID=${DEV_GID:-1000}
+    volumes:
+      - ${DEVBOX_PROJECTS_DIR:-./projects}:/work
+      - devbox-home:/home/dev
+      - devbox-cargo:/home/dev/.cargo
+      - devbox-rustup:/usr/local/rustup
+      - devbox-go:/home/dev/go
+      - devbox-uv-cache:/home/dev/.cache/uv
+      - devbox-pnpm-store:/home/dev/.pnpm-store
+      # staging mount: entrypoint.sh copies it to /home/dev/.ssh with correct modes
+      - type: bind
+        source: ${DEVBOX_SSH_DIR:-~/.ssh}
+        target: /tmp/host-ssh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DEVBOX_GITCONFIG:-~/.gitconfig}
+        target: /home/dev/.gitconfig
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
 
-#volumes:
-#  cargo-cache:
-#  rustup-cache:
+# explicit names: no compose project prefix, shared with `devbox shell`
+volumes:
+  devbox-home:
+    name: devbox-home
+  devbox-cargo:
+    name: devbox-cargo
+  devbox-rustup:
+    name: devbox-rustup
+  devbox-go:
+    name: devbox-go
+  devbox-uv-cache:
+    name: devbox-uv-cache
+  devbox-pnpm-store:
+    name: devbox-pnpm-store
