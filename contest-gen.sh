@@ -33,6 +33,7 @@ using namespace std;
 #define pb push_back
 #define all(x) (x).begin(), (x).end()
 #define sz(x) (int)(x).size()
+using itn = int;
 
 void solve() {
     // TODO: implement solution

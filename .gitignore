@@ -39,3 +39,13 @@ ios/.symlinks/
 
 # Competitive Programming - игнорируем все файлы контестов
 contests/
+
+# Build artifacts / scratch
+target/
+venv/
+*.exe
+scratch/
+.pytest_cache/
+
+# Projects live in their own repos
+projects/
