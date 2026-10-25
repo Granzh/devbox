@@ -133,3 +133,35 @@ cd contests/1920 && ./run.sh 1920A
 
 `devbox dind` starts a `docker:26-dind` daemon on 127.0.0.1:2375; inside the devbox use
 `export DOCKER_HOST=tcp://host.docker.internal:2375`. For the host daemon use `devbox shell --dood`.
+
+## Working from Zed (one window, terminal inside the container)
+
+1. On the host: `.\devbox.ps1 up` (starts the sshd container on `127.0.0.1:2222`, key login only).
+2. Zed: `Cmd/Ctrl+Shift+P` -> "projects: open remote" -> add the connection, or put this in `settings.json`:
+   ```json
+   {
+     "ssh_connections": [
+       {
+         "host": "127.0.0.1",
+         "port": 2222,
+         "username": "dev",
+         "projects": [{ "paths": ["/work"] }]
+       }
+     ]
+   }
+   ```
+3. The integrated terminal now runs inside the container, so `claude`, `cargo`, `go`, `uv` and the container-side
+   `devbox` commands are all available without a separate window.
+
+## `devbox` inside the container
+
+Only `new`, `scratch` and `clean` work in the container (they just create/remove folders under `/work`, which is
+`projects/` on the host). Everything else needs Docker on the host and prints a message saying so.
+
+```bash
+devbox new -n myproj -g   # /work/myproj with git init
+devbox scratch            # /work/scratch/YYYY-MM-DD-xxxxxx
+devbox clean --days 30    # remove old scratch dirs (asks first)
+```
+
+After changing `bin/devbox`, rebuild so the container gets the new copy: `.\devbox.ps1 build`.

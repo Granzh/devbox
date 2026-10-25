@@ -14,7 +14,10 @@ while [ -L "$src" ]; do
 done
 ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
 
-PROJECTS="${DEVBOX_PROJECTS:-$ROOT/projects}"
+# Inside the devbox container only new/scratch/clean work (no docker daemon there);
+# /work is the projects dir in that case.
+in_container() { [ -f /.dockerenv ] || [ -n "${DEVBOX_IN_CONTAINER:-}" ]; }
+if in_container; then PROJECTS="${DEVBOX_PROJECTS:-/work}"; else PROJECTS="${DEVBOX_PROJECTS:-$ROOT/projects}"; fi
 HOST_HOME="${DEVBOX_HOST_HOME:-$HOME}"
 CONTAINER="${DEVBOX_CONTAINER:-devbox}"
 TAG="${DEVBOX_TAG:-latest}"
@@ -366,6 +369,12 @@ cmd_dind() {
 main() {
   local cmd="${1:-help}"
   [ $# -eq 0 ] || shift
+  if in_container; then
+    case "$cmd" in
+      new|scratch|clean|help|-h|--help) ;;
+      *) die "'$cmd' must be run on the host (PowerShell: .\\devbox.ps1 $cmd). Inside the container only: new, scratch, clean." ;;
+    esac
+  fi
   case "$cmd" in
     shell|dev) cmd_shell "$@" ;;
     dev-dood)  cmd_shell --dood "$@" ;;

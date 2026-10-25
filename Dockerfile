@@ -170,6 +170,10 @@ RUN set -eux; \
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# devbox CLI inside the container: new / scratch / clean only (the rest needs docker on the host)
+COPY bin/devbox /usr/local/bin/devbox
+RUN chmod +x /usr/local/bin/devbox
+
 WORKDIR /work
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
