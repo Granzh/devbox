@@ -6,6 +6,10 @@ variable "TAG" {
   default = "latest"
 }
 
+variable "CLAUDE_CODE_VERSION" {
+  default = "latest"
+}
+
 group "default" {
   targets = ["base", "flutter", "java"]
 }
@@ -13,7 +17,8 @@ group "default" {
 target "base" {
   context    = "."
   dockerfile = "Dockerfile"
-  tags       = ["devbox-base:${TAG}"]
+  args       = { CLAUDE_CODE_VERSION = CLAUDE_CODE_VERSION }
+  tags      = ["devbox-base:${TAG}"]
 }
 
 target "flutter" {

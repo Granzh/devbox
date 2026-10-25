@@ -33,6 +33,17 @@ mkdir -p /work
 [ -e "$DEV_HOME/.zshrc" ] || install -o dev -g dev -m 644 /etc/skel/.zshrc "$DEV_HOME/.zshrc"
 chown -h dev:dev "$DEV_HOME/.oh-my-zsh" 2>/dev/null || true
 
+# Claude Code: ~/.claude and ~/.claude.json live in the home volume. The host's global
+# CLAUDE.md (optional, mounted read-only) is linked in; a stale link is removed if the mount is gone.
+HOST_CLAUDE_MD=/etc/devbox/host-claude.md
+install -d -o dev -g dev -m 700 "$DEV_HOME/.claude"
+if [ -s "$HOST_CLAUDE_MD" ]; then
+  ln -sfn "$HOST_CLAUDE_MD" "$DEV_HOME/.claude/CLAUDE.md"
+  chown -h dev:dev "$DEV_HOME/.claude/CLAUDE.md" 2>/dev/null || true
+elif [ -L "$DEV_HOME/.claude/CLAUDE.md" ] && [ "$(readlink "$DEV_HOME/.claude/CLAUDE.md")" = "$HOST_CLAUDE_MD" ]; then
+  rm -f "$DEV_HOME/.claude/CLAUDE.md"
+fi
+
 # SSH: copy keys from the read-only staging mount with sane ownership and modes
 if [ -d "$HOST_SSH" ]; then
   install -d -o dev -g dev -m 700 "$DEV_HOME/.ssh"

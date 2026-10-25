@@ -21,6 +21,8 @@ ARG RUST_TOOLCHAIN=stable
 # "latest" resolves the newest stable release from go.dev (checksum from go.dev's own JSON index)
 ARG GO_VERSION=latest
 ARG JUST_VERSION=1.43.0
+# "latest" is only re-resolved when this layer is rebuilt; pin a version (or --no-cache) to force a bump
+ARG CLAUDE_CODE_VERSION=latest
 ARG TZ=Europe/Moscow
 
 # --- apt packages (one layer, downloads cached across builds) ---
@@ -77,6 +79,15 @@ RUN --mount=type=cache,target=/root/.npm \
     npm i -g "pnpm@${PNPM_VERSION}"; \
     node --version; pnpm --version
 
+# --- Claude Code: npm global as root => /usr/local (outside the home volume, so a rebuild updates it).
+# The npm package ships the native binary; Node 20 only produces an EBADENGINE warning.
+# Config/login live in /home/dev/.claude and /home/dev/.claude.json (the devbox-home volume).
+# Auto-update is off: the install is root-owned and would fail; bump CLAUDE_CODE_VERSION and rebuild.
+RUN --mount=type=cache,target=/root/.npm \
+    set -eux; \
+    npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+    gosu dev claude --version
+
 # --- Go (checksum comes from the go.dev download index) ---
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -127,6 +138,7 @@ ENV TZ=${TZ} \
     UV_CACHE_DIR=/home/dev/.cache/uv \
     npm_config_store_dir=/home/dev/.pnpm-store \
     SHELL=/usr/bin/zsh \
+    DISABLE_AUTOUPDATER=1 \
     PATH=/home/dev/.cargo/bin:/home/dev/go/bin:/home/dev/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}
 RUN set -eux; \
     install -d /etc/devbox/env.d; \
@@ -137,6 +149,7 @@ RUN set -eux; \
       "export GOPATH=${GOPATH}" \
       "export UV_CACHE_DIR=${UV_CACHE_DIR}" \
       "export npm_config_store_dir=${npm_config_store_dir}" \
+      "export DISABLE_AUTOUPDATER=1" \
       "export PATH=${PATH}" > /etc/devbox/env.d/10-base.sh; \
     echo 'for f in /etc/devbox/env.d/*.sh; do [ -r "$f" ] && . "$f"; done; unset f' > /etc/profile.d/00-devbox.sh; \
     cp /etc/profile.d/00-devbox.sh /etc/zsh/zshenv; \

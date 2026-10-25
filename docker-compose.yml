@@ -15,6 +15,8 @@ services:
     environment:
       - DEV_UID=${DEV_UID:-1000}
       - DEV_GID=${DEV_GID:-1000}
+      # no value: forwarded from the host environment only if it is set there, never written to disk
+      - ANTHROPIC_API_KEY
     volumes:
       - ${DEVBOX_PROJECTS_DIR:-./projects}:/work
       - devbox-home:/home/dev
@@ -33,6 +35,14 @@ services:
       - type: bind
         source: ${DEVBOX_GITCONFIG:-~/.gitconfig}
         target: /home/dev/.gitconfig
+        read_only: true
+        bind:
+          create_host_path: false
+      # host ~/.claude/CLAUDE.md, linked into ~/.claude by entrypoint.sh; `devbox up` points it at the
+      # real file when it exists, otherwise this empty placeholder is mounted and ignored
+      - type: bind
+        source: ${DEVBOX_CLAUDE_MD:-./docker/empty-claude.md}
+        target: /etc/devbox/host-claude.md
         read_only: true
         bind:
           create_host_path: false

@@ -10,7 +10,7 @@ The repo root holds the environment only. **Your projects live in `projects/`** 
 
 | Image | Contents |
 |---|---|
-| `devbox-base` | git, zsh stack, build-essential, cmake, gdb, valgrind, clang/clang-tidy/clang-format/lldb 15, cppcheck 2.13, Python 3 + uv, Node 20 + pnpm, Rust (stable, clippy, rustfmt, rust-analyzer), Go (latest stable), ripgrep, fd, fzf, jq, tmux, bat, just, direnv, htop, docker CLI |
+| `devbox-base` | git, zsh stack, build-essential, cmake, gdb, valgrind, clang/clang-tidy/clang-format/lldb 15, cppcheck 2.13, Python 3 + uv, Node 20 + pnpm, Claude Code, Rust (stable, clippy, rustfmt, rust-analyzer), Go (latest stable), ripgrep, fd, fzf, jq, tmux, bat, just, direnv, htop, docker CLI |
 | `devbox-flutter` | `devbox-base` + Flutter SDK (no Android SDK) |
 | `devbox-java` | `devbox-base` + OpenJDK 17 |
 
@@ -26,7 +26,7 @@ make build                # same thing
 ```
 
 Versions are pinned with `ARG`s at the top of `Dockerfile` / `docker/*.Dockerfile`
-(`NODE_VERSION`, `UV_VERSION`, `JUST_VERSION`, `GO_VERSION`, `RUST_TOOLCHAIN`, `FLUTTER_REF`).
+(`NODE_VERSION`, `UV_VERSION`, `JUST_VERSION`, `GO_VERSION`, `RUST_TOOLCHAIN`, `CLAUDE_CODE_VERSION`, `FLUTTER_REF`).
 
 ## The `devbox` CLI
 
@@ -36,6 +36,7 @@ Versions are pinned with `ARG`s at the top of `Dockerfile` / `docker/*.Dockerfil
 | Command | What it does |
 |---|---|
 | `devbox shell [--image base\|flutter\|java] [--dood] [--here]` | Shell in the `devbox` container. If it is already running, `docker exec` into it; otherwise start it with `projects/` mounted at `/work`. `--here` mounts the current directory instead, `--dood` passes the host docker socket. |
+| `devbox claude [path\|project] [--isolate] [--image ...] [-- args]` | Start (or exec into) the container, `cd` into `/work/<project>` and run `claude`. See [Claude Code](#claude-code). |
 | `devbox stop` | Stop the container. Needed to switch to a different `--image`. |
 | `devbox new -n <name> [-g\|--git]` | Create `projects/<name>`. `-g` runs `git init -b main` and adds a minimal `.gitignore` and `README.md`. `devbox new <name>` also works. |
 | `devbox scratch` | Create `projects/scratch/YYYY-MM-DD-<random>` and print its path. |
@@ -83,6 +84,41 @@ Named volumes, so rebuilding the image or container does not redownload anything
 A new Rust toolchain version baked into the image does not replace the one already in `devbox-rustup`; use
 `rustup update`, or remove that volume yourself to start fresh. The older `devbox_cargo-cache` / `devbox_rustup-cache`
 volumes are no longer used and were left in place.
+
+## Claude Code
+
+`claude` is installed in `devbox-base` (so in every derived image) with `npm i -g @anthropic-ai/claude-code`, as root into
+`/usr/local`. It is deliberately **not** under `/home/dev`: that is the `devbox-home` volume and would hide a rebuilt binary.
+Auto-update is off (the install is root-owned); to upgrade, rebuild: `CLAUDE_CODE_VERSION=<x.y.z> devbox build`
+(`latest` is only re-resolved when the layer is rebuilt, e.g. with `--no-cache`).
+
+```bash
+devbox claude                      # in projects/ (or the project you are cd'd into)
+devbox claude myproj               # cd /work/myproj, run claude
+devbox claude myproj --isolate     # container with ONLY projects/myproj mounted
+devbox claude myproj -- --resume   # arguments after -- go to claude
+```
+
+- **State:** `~/.claude` and `~/.claude.json` are in the `devbox-home` volume, so login, settings, history and memory survive
+  `docker compose down && up` and `devbox stop`. Only `docker volume rm devbox-home` removes them.
+- **Login:** run `devbox claude`, pick a login method, open the printed URL in your host browser and paste the code back.
+- **API key:** if `ANTHROPIC_API_KEY` is set in the host environment it is forwarded by name (`-e ANTHROPIC_API_KEY`); it is never written
+  to an image, compose file or disk. Claude asks once whether to use it. On Windows `devbox.ps1` passes it through `WSLENV`.
+- **Global instructions:** host `~/.claude/CLAUDE.md`, if present, is mounted read-only and linked to `/home/dev/.claude/CLAUDE.md`.
+  Absent is fine. (Project-level `CLAUDE.md` files are just part of the project.)
+- `devbox doctor` checks the binary, its version and that `~/.claude` is writable.
+
+### The container is only a partial sandbox
+
+- `/work` is `projects/`, **all of it, writable**. Claude can modify or delete every project, not just the one you named.
+- The host `~/.ssh` keys are **copied into `/home/dev/.ssh`** (in the shared `devbox-home` volume), plus the SSH agent socket when
+  available, so anything running as `dev` can push to your git remotes. `dev` also has passwordless sudo.
+- Credentials for Claude itself live in the same home volume.
+
+So treat `--dangerously-skip-permissions` with care, and only use it through
+`devbox claude <project> --isolate`: that starts a separate container (`devbox-claude-<project>`) where just that project is
+mounted, so other projects are unreachable. It does not remove the SSH keys or the shared home volume; `--dood` is never
+applied to it. For stronger isolation use a throwaway project and a deploy key.
 
 ## Competitive programming
 

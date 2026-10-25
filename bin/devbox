@@ -39,6 +39,8 @@ Usage: devbox <command> [options]
 
   shell [--image base|flutter|java] [--dood] [--here]
                        open a shell in the devbox container (starts it if needed)
+  claude [path|project] [--isolate] [--image base|flutter|java] [-- claude args...]
+                       run Claude Code in /work/<project> (--isolate: mount only that project)
   stop                 stop the devbox container
   new <name> | new -n <name> [-g|--git]
                        create projects/<name> (--git: git init -b main + .gitignore + README)
@@ -85,7 +87,29 @@ common_flags() {
   if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
     FLAGS+=(-e SSH_AUTH_SOCK=/ssh-agent -v "$SSH_AUTH_SOCK:/ssh-agent")
   fi
+  # API key: forwarded by name only, so the value never lands on a command line or in a file
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then FLAGS+=(-e ANTHROPIC_API_KEY); fi
+  # global CLAUDE.md, read-only; entrypoint.sh links it into ~/.claude (skipped when absent)
+  if [ -f "$HOST_HOME/.claude/CLAUDE.md" ]; then
+    FLAGS+=(-v "$(host_path "$HOST_HOME/.claude/CLAUDE.md"):/etc/devbox/host-claude.md:ro")
+  fi
   FLAGS+=(--add-host host.docker.internal:host-gateway)
+}
+
+# start container $1 from image $2 with host dir $3 mounted at $4 (no-op if it already runs that image)
+ensure_container() {
+  local name="$1" ref="$2" src="$3" dst="$4" dood="${5:-0}"
+  if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)" = true ]; then
+    local cur; cur="$(docker inspect -f '{{.Config.Image}}' "$name")"
+    [ "$cur" = "$ref" ] || die "container '$name' is already running image $cur; run 'devbox stop' to switch to $ref"
+    return 0
+  fi
+  docker image inspect "$ref" >/dev/null 2>&1 || die "image $ref not found; run 'devbox build'"
+  docker rm -f "$name" >/dev/null 2>&1 || true   # leftover stopped container with the same name
+  common_flags
+  local extra=()
+  if [ "$dood" = 1 ]; then extra+=(-v /var/run/docker.sock:/var/run/docker.sock); fi
+  docker run -d --rm --name "$name" --init "${FLAGS[@]}" "${extra[@]}"     -v "$(host_path "$src"):$dst" "$ref" sleep infinity >/dev/null
 }
 
 cmd_shell() {
@@ -101,26 +125,62 @@ cmd_shell() {
   done
   local ref; ref="$(image_ref "$image")"
   need_docker
+  local work="$PROJECTS"
+  if [ "$here" = 1 ]; then work="$PWD"; else mkdir -p "$PROJECTS"; fi
+  ensure_container "$CONTAINER" "$ref" "$work" /work "$dood"
+  exec docker exec "${TTY_FLAGS[@]}" -u dev -w /work "$CONTAINER" zsh
+}
 
-  if container_running; then
-    local cur; cur="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
-    if [ "$cur" != "$ref" ]; then
-      die "container '$CONTAINER' is already running image $cur; run 'devbox stop' to switch to $ref"
-    fi
-    exec docker exec "${TTY_FLAGS[@]}" -u dev -w /work "$CONTAINER" zsh
+# project dir relative to $PROJECTS from a project name or a path inside it ("" = the projects root)
+project_rel() {
+  local t="$1" abs root
+  case "$t" in .|..|./*|../*|/*) ;; *) if [ -d "$PROJECTS/$t" ]; then rel="${t%/}"; return 0; fi ;; esac
+  [ -d "$t" ] || die "'$t' is neither a project under $PROJECTS nor a directory"
+  abs="$(cd "$t" && pwd -P)"; root="$(cd "$PROJECTS" && pwd -P)"
+  case "$abs" in
+    "$root") rel="" ;;
+    "$root"/*) rel="${abs#"$root"/}" ;;
+    *) die "$t is outside $PROJECTS; only directories under the projects root are visible in the container" ;;
+  esac
+}
+
+cmd_claude() {
+  local image=base isolate=0 target="" args=() rel=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --image) [ $# -ge 2 ] || die "--image needs a value"; image="$2"; shift 2 ;;
+      --image=*) image="${1#--image=}"; shift ;;
+      --isolate) isolate=1; shift ;;
+      --) shift; args=("$@"); break ;;
+      -*) die "claude: unknown option '$1' (pass claude's own flags after --)" ;;
+      *) [ -z "$target" ] || die "claude: more than one project given"; target="$1"; shift ;;
+    esac
+  done
+  local ref; ref="$(image_ref "$image")"
+  need_docker
+  mkdir -p "$PROJECTS"
+  if [ -n "$target" ]; then
+    project_rel "$target"
+  else   # inside projects/ -> that dir, else the root
+    local here_abs root_abs; here_abs="$(pwd -P)"; root_abs="$(cd "$PROJECTS" && pwd -P)"
+    case "$here_abs" in "$root_abs"/*) rel="${here_abs#"$root_abs"/}" ;; esac
   fi
 
-  docker image inspect "$ref" >/dev/null 2>&1 || die "image $ref not found; run 'devbox build'"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true   # leftover stopped container with the same name
-
-  local work
-  if [ "$here" = 1 ]; then work="$(host_path "$PWD")"; else mkdir -p "$PROJECTS"; work="$(host_path "$PROJECTS")"; fi
-  common_flags
-  local extra=()
-  if [ "$dood" = 1 ]; then extra+=(-v /var/run/docker.sock:/var/run/docker.sock); fi
-  docker run -d --rm --name "$CONTAINER" --init "${FLAGS[@]}" "${extra[@]}" \
-    -v "$work:/work" "$ref" sleep infinity >/dev/null
-  exec docker exec "${TTY_FLAGS[@]}" -u dev -w /work "$CONTAINER" zsh
+  local name="$CONTAINER" workdir=/work
+  if [ "$isolate" = 1 ]; then
+    [ -n "$rel" ] || die "--isolate needs a project: devbox claude <project> --isolate"
+    # only this project is mounted, in its own container so the shared one keeps all of projects/
+    name="$CONTAINER-claude-$(printf '%s' "$rel" | tr -c 'A-Za-z0-9_.-' '-')"
+    workdir="/work/$rel"
+    ensure_container "$name" "$ref" "$PROJECTS/$rel" "$workdir"
+  else
+    ensure_container "$name" "$ref" "$PROJECTS" /work
+    [ -z "$rel" ] || workdir="/work/$rel"
+    docker exec -u dev "$name" test -d "$workdir"       || die "$workdir does not exist in '$name' (was it started with 'shell --here'? run 'devbox stop')"
+  fi
+  local env=()
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then env+=(-e ANTHROPIC_API_KEY); fi
+  exec docker exec "${TTY_FLAGS[@]}" "${env[@]}" -u dev -w "$workdir" "$name" claude "${args[@]}"
 }
 
 cmd_stop() {
@@ -241,6 +301,10 @@ cmd_doctor() {
   if [ -d "$HOST_HOME/.ssh" ] && compgen -G "$HOST_HOME/.ssh/id_*" >/dev/null; then ok "SSH keys in $HOST_HOME/.ssh"; else meh "no SSH keys in $HOST_HOME/.ssh"; fi
   if [ -f "$HOST_HOME/.gitconfig" ]; then ok "$HOST_HOME/.gitconfig"; else meh "no ~/.gitconfig on host"; fi
 
+  echo "Claude Code"
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then ok "ANTHROPIC_API_KEY set on host (forwarded by name, not stored)"; else ok "no ANTHROPIC_API_KEY on host (use 'claude' login inside)"; fi
+  if [ -f "$HOST_HOME/.claude/CLAUDE.md" ]; then ok "host CLAUDE.md will be mounted read-only"; else ok "no host ~/.claude/CLAUDE.md (optional)"; fi
+
   echo "Inside the container"
   ref="devbox-base:$TAG"
   if docker image inspect "$ref" >/dev/null 2>&1; then
@@ -250,10 +314,15 @@ cmd_doctor() {
       ls /home/dev/.ssh/id_* >/dev/null 2>&1 && echo "ssh-keys=yes" || echo "ssh-keys=no"
       [ "$(stat -c %a /home/dev/.ssh 2>/dev/null)" = 700 ] && echo "ssh-mode=yes" || echo "ssh-mode=no"
       n="$(git config --global user.name 2>/dev/null || true)"; [ -n "$n" ] && echo "git-name=yes" || echo "git-name=no"
+      v="$(claude --version 2>/dev/null || true)"; [ -n "$v" ] && echo "claude=yes:$v" || echo "claude=no"
+      mkdir -p /home/dev/.claude && touch /home/dev/.claude/.doctor 2>/dev/null && rm -f /home/dev/.claude/.doctor         && echo "claude-dir=yes" || echo "claude-dir=no"
     ' 2>&1)"; then
       case "$out" in *ssh-keys=yes*) ok "SSH keys copied to /home/dev/.ssh" ;; *) bad "no SSH keys visible in the container" ;; esac
       case "$out" in *ssh-mode=yes*) ok "/home/dev/.ssh has mode 700" ;; *) bad "/home/dev/.ssh has wrong mode" ;; esac
       case "$out" in *git-name=yes*) ok "git user.name visible" ;; *) bad "git config not visible in the container" ;; esac
+      case "$out" in *claude=yes:*) ok "claude binary present ($(printf '%s
+' "$out" | sed -n 's/^claude=yes://p'))" ;; *) bad "claude binary missing (rebuild devbox-base)" ;; esac
+      case "$out" in *claude-dir=yes*) ok "/home/dev/.claude is writable" ;; *) bad "/home/dev/.claude is not writable" ;; esac
     else bad "could not start a test container: $out"; fi
   else meh "skipped (devbox-base missing)"; fi
 
@@ -279,6 +348,7 @@ cmd_up() {
   export DEVBOX_SSH_DIR="${DEVBOX_SSH_DIR:-$(host_path "$HOST_HOME/.ssh")}"
   export DEVBOX_GITCONFIG="${DEVBOX_GITCONFIG:-$(host_path "$HOST_HOME/.gitconfig")}"
   DEVBOX_PROJECTS_DIR="$(host_path "$PROJECTS")"; export DEVBOX_PROJECTS_DIR
+  if [ -f "$HOST_HOME/.claude/CLAUDE.md" ]; then DEVBOX_CLAUDE_MD="$(host_path "$HOST_HOME/.claude/CLAUDE.md")"; export DEVBOX_CLAUDE_MD; fi
   if ! is_windows_shell; then DEV_UID="$(id -u)"; DEV_GID="$(id -g)"; export DEV_UID DEV_GID; fi
   compose up -d "$@"
 }
@@ -299,6 +369,7 @@ main() {
   case "$cmd" in
     shell|dev) cmd_shell "$@" ;;
     dev-dood)  cmd_shell --dood "$@" ;;
+    claude)    cmd_claude "$@" ;;
     stop)      cmd_stop "$@" ;;
     new)       cmd_new "$@" ;;
     scratch)   cmd_scratch "$@" ;;

@@ -16,7 +16,7 @@ if ($distroOk) {
     $wslScript = (& wsl.exe wslpath -a ($script -replace '\\', '/')).Trim()
     $wslHome = (& wsl.exe wslpath -a ($userHome -replace '\\', '/')).Trim()
     $env:DEVBOX_HOST_HOME = $wslHome
-    $env:WSLENV = (@($env:WSLENV, 'DEVBOX_HOST_HOME', 'DEVBOX_TAG') | Where-Object { $_ }) -join ':'
+    $env:WSLENV = (@($env:WSLENV, 'DEVBOX_HOST_HOME', 'DEVBOX_TAG', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_VERSION') | Where-Object { $_ }) -join ':'
     & wsl.exe bash $wslScript @args
     exit $LASTEXITCODE
 }
