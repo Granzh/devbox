@@ -10,7 +10,7 @@ FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
 FROM docker:29-cli AS dockercli
 FROM node:24.22.2-bookworm-slim AS node
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG RUST_TOOLCHAIN=stable
