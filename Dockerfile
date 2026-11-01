@@ -1,28 +1,22 @@
-# devbox-base: shell stack, C/C++ (clang-15 + cppcheck 2.7 straight from Ubuntu apt),
-# Python + uv, Node + pnpm, Rust, Go and everyday CLI tools.
+# devbox-base: shell stack, C/C++ (current clang + cppcheck from Ubuntu apt),
+# Python + uv, Node + pnpm, Rust, Go, mise and everyday CLI tools.
 # Flutter and Java live in docker/*.Dockerfile on top of this image.
 #
 # Toolchains are installed OUTSIDE /home/dev on purpose: /home/dev is a named
 # volume at runtime and would hide anything baked into it.
 
-ARG UBUNTU_VERSION=24.04
-ARG UV_VERSION=0.9.5
-ARG DOCKER_CLI_VERSION=27
+# FROM tags are literal on purpose: Dependabot reads and bumps them.
+FROM ghcr.io/astral-sh/uv:0.9.5 AS uv
+FROM docker:27-cli AS dockercli
+FROM node:24.22.2-bookworm-slim AS node
 
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
-FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
-
-FROM ubuntu:${UBUNTU_VERSION}
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG NODE_VERSION=20.19.5
-ARG PNPM_VERSION=9
 ARG RUST_TOOLCHAIN=stable
 # "latest" resolves the newest stable release from go.dev (checksum from go.dev's own JSON index)
 ARG GO_VERSION=latest
 ARG JUST_VERSION=1.43.0
-# "latest" is only re-resolved when this layer is rebuilt; pin a version (or --no-cache) to force a bump
-ARG CLAUDE_CODE_VERSION=latest
 ARG TZ=Europe/Moscow
 
 # --- apt packages (one layer, downloads cached across builds) ---
@@ -37,19 +31,27 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         git git-lfs openssh-client openssh-server netcat-openbsd \
         zsh bash-completion vim neovim \
         build-essential pkg-config gdb valgrind cmake libssl-dev \
-        clang-15 clang-tools-15 clang-tidy-15 clang-format-15 lldb-15 lld-15 cppcheck \
+        clang clang-tools clang-tidy clang-format lldb lld cppcheck \
         python3 python3-venv python3-pip python3-dev \
         ripgrep fd-find fzf jq tmux bat direnv htop; \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
     ln -sf /usr/bin/batcat /usr/local/bin/bat; \
-    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 150; \
-    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 150; \
-    update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-15 150; \
-    update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-15 150; \
-    update-alternatives --install /usr/bin/lldb lldb /usr/bin/lldb-15 150; \
     ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime; echo "${TZ}" > /etc/timezone; \
     git config --system --add safe.directory '*'; \
     git lfs install --system --skip-repo
+
+# --- mise (from its apt repo, so a rebuild with --pull brings a new mise). Tool versions
+# are managed at runtime by `devbox update`; data lives in the home volume.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    set -eux; \
+    install -dm 755 /etc/apt/keyrings; \
+    curl -fsSL https://mise.jdx.dev/gpg-key.pub | gpg --dearmor -o /etc/apt/keyrings/mise-archive-keyring.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.gpg arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" > /etc/apt/sources.list.d/mise.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends mise; \
+    mise --version
+COPY docker/mise-global.toml /etc/devbox/mise-global.toml
 
 # --- user dev (UID/GID are remapped by entrypoint.sh) ---
 # Ubuntu 24.04+ ships an 'ubuntu' user on 1000:1000; drop it so dev can take that id
@@ -66,27 +68,25 @@ RUN set -eux; \
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=uv /uv /uvx /usr/local/bin/
 
-# --- Node.js + pnpm (tarball is checksum-verified) ---
-RUN --mount=type=cache,target=/root/.npm \
-    set -eux; \
-    case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; *) exit 1;; esac; \
-    f="node-v${NODE_VERSION}-linux-${a}.tar.xz"; \
-    cd /tmp; \
-    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${f}"; \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " ${f}\$" | sha256sum -c -; \
-    tar -xJf "${f}" -C /usr/local --strip-components=1 --no-same-owner; \
-    rm -f "${f}" /usr/local/CHANGELOG.md /usr/local/LICENSE /usr/local/README.md; \
-    npm i -g "pnpm@${PNPM_VERSION}"; \
-    node --version; pnpm --version
+# --- Node.js from the official image (Dependabot bumps the tag in the FROM line at the top) ---
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN set -eux; \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+    node --version; npm --version
 
-# --- Claude Code: npm global as root => /usr/local (outside the home volume, so a rebuild updates it).
-# The npm package ships the native binary; Node 20 only produces an EBADENGINE warning.
-# Config/login live in /home/dev/.claude and /home/dev/.claude.json (the devbox-home volume).
-# Auto-update is off: the install is root-owned and would fail; bump CLAUDE_CODE_VERSION and rebuild.
+# --- pnpm + Claude Code: npm global as root => /usr/local (outside the home volume).
+# Versions come from docker/npm/package.json (Dependabot bumps them). Config/login live in
+# /home/dev/.claude and /home/dev/.claude.json (the devbox-home volume).
+# Auto-update is off for this baked copy (root-owned). `devbox update` installs a newer
+# claude via mise into the home volume; its shim then wins over this one.
+COPY docker/npm/package.json /tmp/npm-tools/package.json
 RUN --mount=type=cache,target=/root/.npm \
     set -eux; \
-    npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
-    gosu dev claude --version
+    npm install -g $(node -p "Object.entries(require('/tmp/npm-tools/package.json').dependencies).map(([n,v])=>n+'@'+v).join(' ')"); \
+    rm -rf /tmp/npm-tools; \
+    pnpm --version; gosu dev claude --version
 
 # --- Go (checksum comes from the go.dev download index) ---
 RUN set -eux; \
@@ -139,7 +139,7 @@ ENV TZ=${TZ} \
     npm_config_store_dir=/home/dev/.pnpm-store \
     SHELL=/usr/bin/zsh \
     DISABLE_AUTOUPDATER=1 \
-    PATH=/home/dev/.cargo/bin:/home/dev/go/bin:/home/dev/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}
+    PATH=/home/dev/.local/share/mise/shims:/home/dev/.cargo/bin:/home/dev/go/bin:/home/dev/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}
 RUN set -eux; \
     install -d /etc/devbox/env.d; \
     printf '%s\n' \

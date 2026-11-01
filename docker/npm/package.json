@@ -1,0 +1,9 @@
+{
+  "name": "devbox-npm-tools",
+  "private": true,
+  "description": "Global npm tools baked into devbox-base. Versions live here so Dependabot can bump them.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.316",
+    "pnpm": "9.15.9"
+  }
+}

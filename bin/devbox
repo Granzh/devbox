@@ -50,6 +50,10 @@ Usage: devbox <command> [options]
   scratch              create projects/scratch/YYYY-MM-DD-xxxxxx and print its path
   clean [--days N] [-y]
                        delete scratch dirs untouched for N days (default 30)
+  update [--check] [--image base|flutter|java]
+                       update tools inside the container (mise: node, go, uv, pnpm, just, claude; rustup).
+                       --check only lists what is outdated. System packages (clang, cmake...) change
+                       only with 'devbox build --pull'
   prune [-y]           remove stopped containers, dangling images, build cache (never volumes)
   doctor               check docker, images, volumes, ssh keys and git config
   build [target...]    docker buildx bake (base first, then the rest)
@@ -70,7 +74,7 @@ host_path() {
 image_ref() {
   case "$1" in
     base|flutter|java) echo "devbox-$1:$TAG" ;;
-    llvm) die "there is no llvm image: clang-15 and cppcheck are part of the base image" ;;
+    llvm) die "there is no llvm image: clang and cppcheck are part of the base image" ;;
     *) die "unknown image '$1' (expected: ${IMAGES[*]})" ;;
   esac
 }
@@ -265,6 +269,40 @@ cmd_clean() {
   info "deleted ${#stale[@]} dir(s)"
 }
 
+cmd_update() {
+  local check=0 image=base
+  local pass=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check|-c) check=1; pass+=(--check); shift ;;
+      --image) [ $# -ge 2 ] || die "--image needs a value"; image="$2"; shift 2 ;;
+      --image=*) image="${1#--image=}"; shift ;;
+      *) die "update: unknown option '$1'" ;;
+    esac
+  done
+  if ! in_container; then
+    # host: run the same command inside the (possibly just started) devbox container
+    local ref; ref="$(image_ref "$image")"
+    need_docker
+    mkdir -p "$PROJECTS"
+    ensure_container "$CONTAINER" "$ref" "$PROJECTS" /work 0
+    exec docker exec "${TTY_FLAGS[@]}" -u dev "$CONTAINER" devbox update ${pass[@]+"${pass[@]}"}
+  fi
+  command -v mise >/dev/null 2>&1 || die "mise is not in this image; rebuild it: devbox build --pull"
+  if [ "$check" = 1 ]; then
+    echo "== mise-managed tools"; mise outdated || true
+    echo "== rust"; rustup check || true
+    return 0
+  fi
+  echo "== mise: install what is missing, upgrade the rest"
+  mise install
+  mise upgrade
+  mise reshim
+  echo "== rust"
+  rustup update
+  echo "Done. System packages (clang, cmake, ...) only change with: devbox build --pull"
+}
+
 cmd_prune() {
   local yes=0
   [ "${1:-}" != "-y" ] || yes=1
@@ -371,8 +409,8 @@ main() {
   [ $# -eq 0 ] || shift
   if in_container; then
     case "$cmd" in
-      new|scratch|clean|help|-h|--help) ;;
-      *) die "'$cmd' must be run on the host (PowerShell: .\\devbox.ps1 $cmd). Inside the container only: new, scratch, clean." ;;
+      new|scratch|clean|update|help|-h|--help) ;;
+      *) die "'$cmd' must be run on the host (PowerShell: .\\devbox.ps1 $cmd). Inside the container only: new, scratch, clean, update." ;;
     esac
   fi
   case "$cmd" in
@@ -383,6 +421,7 @@ main() {
     new)       cmd_new "$@" ;;
     scratch)   cmd_scratch "$@" ;;
     clean)     cmd_clean "$@" ;;
+    update)    cmd_update "$@" ;;
     prune)     cmd_prune "$@" ;;
     doctor)    cmd_doctor "$@" ;;
     build)     cmd_build "$@" ;;

@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # FROM lines in Dockerfile: ubuntu, node, uv, docker cli
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Node: stay on the LTS line, bump the major deliberately
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+  # claude-code and pnpm versions in docker/npm/package.json
+  - package-ecosystem: npm
+    directory: /docker/npm
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: pnpm
+        update-types: ["version-update:semver-major"]

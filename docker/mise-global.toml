@@ -1,0 +1,13 @@
+# Seeded to ~/.config/mise/config.toml on first start (only if the file does not exist yet).
+# Nothing here is installed until you run `devbox update`; until then the versions baked
+# into the image are used. After that mise shims take precedence over the baked ones.
+# Edit freely: pin a version ("22") to stay on it, or delete a line to keep the baked one.
+# Per-project versions: put a mise.toml / .tool-versions in the project, mise honours it.
+# Rust is not listed: it is updated by rustup (`devbox update` runs `rustup update`).
+[tools]
+node = "lts"
+go = "latest"
+uv = "latest"
+pnpm = "9"
+just = "latest"
+"npm:@anthropic-ai/claude-code" = "latest"

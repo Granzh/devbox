@@ -1,7 +1,7 @@
 # Devbox
 
-A Docker-based dev environment: zsh + oh-my-zsh + Powerlevel10k, C/C++ (clang-15, cppcheck, gdb, valgrind, cmake),
-Python + uv, Node 20 + pnpm, Rust, Go, and everyday CLI tools. Flutter and Java are separate images.
+A Docker-based dev environment: zsh + oh-my-zsh + Powerlevel10k, C/C++ (clang, cppcheck, gdb, valgrind, cmake),
+Python + uv, Node 24 + pnpm, mise, Rust, Go, and everyday CLI tools. Flutter and Java are separate images.
 
 The repo root holds the environment only. **Your projects live in `projects/`** (gitignored; each one is its own git repo).
 `contests/` (gitignored) is used by `contest-gen.sh` / `run.sh`.
@@ -10,11 +10,11 @@ The repo root holds the environment only. **Your projects live in `projects/`** 
 
 | Image | Contents |
 |---|---|
-| `devbox-base` | git, zsh stack, build-essential, cmake, gdb, valgrind, clang/clang-tidy/clang-format/lldb 15, cppcheck 2.13, Python 3 + uv, Node 20 + pnpm, Claude Code, Rust (stable, clippy, rustfmt, rust-analyzer), Go (latest stable), ripgrep, fd, fzf, jq, tmux, bat, just, direnv, htop, docker CLI |
+| `devbox-base` | git, zsh stack, build-essential, cmake, gdb, valgrind, clang/clang-tidy/clang-format/lldb (Ubuntu's current version), cppcheck, Python 3 + uv, Node 24 + pnpm, mise, Claude Code, Rust (stable, clippy, rustfmt, rust-analyzer), Go (latest stable), ripgrep, fd, fzf, jq, tmux, bat, just, direnv, htop, docker CLI |
 | `devbox-flutter` | `devbox-base` + Flutter SDK (no Android SDK) |
 | `devbox-java` | `devbox-base` + OpenJDK 17 |
 
-The base is Ubuntu 24.04 (`UBUNTU_VERSION` build arg). clang-15 and cppcheck 2.13 come straight from its apt (Ubuntu 26.04 dropped clang-15), so there is no separate LLVM image.
+The base is Ubuntu 24.04. clang and cppcheck come straight from its apt, so there is no separate LLVM image.
 Timezone is Europe/Moscow.
 
 ### Build
@@ -25,8 +25,21 @@ bin/devbox build base     # just one target
 make build                # same thing
 ```
 
-Versions are pinned with `ARG`s at the top of `Dockerfile` / `docker/*.Dockerfile`
-(`NODE_VERSION`, `UV_VERSION`, `JUST_VERSION`, `GO_VERSION`, `RUST_TOOLCHAIN`, `CLAUDE_CODE_VERSION`, `FLUTTER_REF`).
+Versions: the `FROM` lines in `Dockerfile` (Ubuntu, Node, uv, docker CLI) and `docker/npm/package.json` (Claude Code, pnpm)
+are bumped by Dependabot PRs; the rest are `ARG`s (`JUST_VERSION`, `GO_VERSION`, `RUST_TOOLCHAIN`, `FLUTTER_REF`).
+Nothing updates by itself: merge the PR, then `devbox build --pull`.
+
+## Updating
+
+| What | How |
+|---|---|
+| Tools you use every day: node, go, uv, pnpm, just, claude, rust | `devbox update` (`--check` only lists what is outdated). Installs into the volumes, so it survives container restarts and takes precedence over what the image was built with. |
+| System packages: clang, cmake, gdb, apt stuff, the baked tool versions | `devbox build --pull` (rebuild the images). |
+| Image pins (Ubuntu, Node, uv, claude-code, pnpm) | Dependabot PRs in `.github/dependabot.yml`; merge, then rebuild. |
+
+`devbox update` works from the host and inside the container. The list of mise-managed tools is
+`~/.config/mise/config.toml` (seeded from `docker/mise-global.toml` on first start; edit it to pin or drop a tool).
+Projects can pin their own versions with `mise.toml`, `.tool-versions`, `rust-toolchain.toml` or `go.mod`.
 
 ## The `devbox` CLI
 
@@ -87,10 +100,10 @@ volumes are no longer used and were left in place.
 
 ## Claude Code
 
-`claude` is installed in `devbox-base` (so in every derived image) with `npm i -g @anthropic-ai/claude-code`, as root into
+`claude` is installed in `devbox-base` (so in every derived image) with `npm install -g`, as root into
 `/usr/local`. It is deliberately **not** under `/home/dev`: that is the `devbox-home` volume and would hide a rebuilt binary.
-Auto-update is off (the install is root-owned); to upgrade, rebuild: `CLAUDE_CODE_VERSION=<x.y.z> devbox build`
-(`latest` is only re-resolved when the layer is rebuilt, e.g. with `--no-cache`).
+Auto-update is off for this baked copy (root-owned); the version comes from `docker/npm/package.json` (Dependabot).
+To get a newer one without rebuilding, run `devbox update`: mise installs it into the home volume and its shim wins.
 
 ```bash
 devbox claude                      # in projects/ (or the project you are cd'd into)

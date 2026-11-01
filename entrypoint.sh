@@ -33,6 +33,12 @@ mkdir -p /work
 [ -e "$DEV_HOME/.zshrc" ] || install -o dev -g dev -m 644 /etc/skel/.zshrc "$DEV_HOME/.zshrc"
 chown -h dev:dev "$DEV_HOME/.oh-my-zsh" 2>/dev/null || true
 
+# mise: seed the managed-tools list on first run. Nothing gets installed until `devbox update`.
+if [ ! -e "$DEV_HOME/.config/mise/config.toml" ] && [ -r /etc/devbox/mise-global.toml ]; then
+  gosu dev mkdir -p "$DEV_HOME/.config/mise"
+  gosu dev cp /etc/devbox/mise-global.toml "$DEV_HOME/.config/mise/config.toml"
+fi
+
 # Claude Code: ~/.claude and ~/.claude.json live in the home volume. The host's global
 # CLAUDE.md (optional, mounted read-only) is linked in; a stale link is removed if the mount is gone.
 HOST_CLAUDE_MD=/etc/devbox/host-claude.md
