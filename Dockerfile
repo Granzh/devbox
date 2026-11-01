@@ -7,7 +7,7 @@
 
 # FROM tags are literal on purpose: Dependabot reads and bumps them.
 FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
-FROM docker:27-cli AS dockercli
+FROM docker:29-cli AS dockercli
 FROM node:24.22.2-bookworm-slim AS node
 
 FROM ubuntu:24.04
