@@ -178,3 +178,20 @@ devbox clean --days 30    # remove old scratch dirs (asks first)
 ```
 
 After changing `bin/devbox`, rebuild so the container gets the new copy: `.\devbox.ps1 build`.
+
+## React / Vue / Tailwind
+
+```bash
+devbox new -n shop -t react -g    # or: -t vue.  Vite + TypeScript + Tailwind v4 (+ git init with -g)
+cd projects/shop && pnpm dev      # inside the container; open http://localhost:5173 on the host
+```
+
+- Ports `3000-3010`, `4173`, `5173` and `8080` are published on `127.0.0.1` by both `devbox shell` and the compose service.
+  Dev servers must listen on `0.0.0.0` (the templates set `server.host: true`; for others use `--host`).
+  Override the list with `DEVBOX_PORTS="-p 127.0.0.1:9000:9000"` (empty value = publish nothing).
+  The `devbox` and `devbox-sshd` containers cannot run at the same time with the same ports published.
+- HMR on Windows bind mounts: file events do not arrive, so devbox sets `CHOKIDAR_USEPOLLING=1` there and the templates turn on
+  Vite's polling when it is set. Keeping `projects/` inside WSL2 (`~/projects`, with `DEVBOX_PROJECTS` pointing there) is faster and
+  needs no polling; `node_modules` on a Windows bind mount is slow for installs and builds.
+- Zed starts TypeScript, Vue (Volar) and Tailwind language servers on the remote side by itself; they are not in the image.
+- Next.js and Nuxt are not templates: use their own CLIs (`pnpm create next-app`, `pnpm dlx nuxi init`) inside the container.

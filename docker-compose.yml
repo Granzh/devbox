@@ -12,11 +12,18 @@ services:
     ports:
       # loopback only; key-based login, no passwords
       - "127.0.0.1:2222:22"
+      # dev servers (Vite 5173, Next/Nuxt 3000, preview 4173, 8080); loopback only
+      - "127.0.0.1:3000-3010:3000-3010"
+      - "127.0.0.1:4173:4173"
+      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:8080:8080"
     environment:
       - DEV_UID=${DEV_UID:-1000}
       - DEV_GID=${DEV_GID:-1000}
       # no value: forwarded from the host environment only if it is set there, never written to disk
       - ANTHROPIC_API_KEY
+      # Windows bind mounts do not deliver file events; Vite/chokidar must poll (set to 0 on Linux)
+      - CHOKIDAR_USEPOLLING=${CHOKIDAR_USEPOLLING:-1}
     volumes:
       - ${DEVBOX_PROJECTS_DIR:-./projects}:/work
       - devbox-home:/home/dev

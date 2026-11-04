@@ -45,8 +45,9 @@ Usage: devbox <command> [options]
   claude [path|project] [--isolate] [--image base|flutter|java] [-- claude args...]
                        run Claude Code in /work/<project> (--isolate: mount only that project)
   stop                 stop the devbox container
-  new <name> | new -n <name> [-g|--git]
-                       create projects/<name> (--git: git init -b main + .gitignore + README)
+  new <name> | new -n <name> [-g|--git] [-t react|vue]
+                       create projects/<name> (--git: git init -b main + .gitignore + README;
+                       -t: Vite + Tailwind v4 + TypeScript starter, installed inside the container)
   scratch              create projects/scratch/YYYY-MM-DD-xxxxxx and print its path
   clean [--days N] [-y]
                        delete scratch dirs untouched for N days (default 30)
@@ -116,6 +117,12 @@ ensure_container() {
   common_flags
   local extra=()
   if [ "$dood" = 1 ]; then extra+=(-v /var/run/docker.sock:/var/run/docker.sock); fi
+  # dev-server ports, loopback only (override: DEVBOX_PORTS="-p 127.0.0.1:3000:3000 ..."; empty = none)
+  local ports=()
+  read -r -a ports <<< "${DEVBOX_PORTS--p 127.0.0.1:3000-3010:3000-3010 -p 127.0.0.1:4173:4173 -p 127.0.0.1:5173:5173 -p 127.0.0.1:8080:8080}"
+  extra+=(${ports[@]+"${ports[@]}"})
+  # file events do not cross Windows bind mounts: tell Vite/chokidar to poll
+  if is_windows_shell || [[ "$src" == /mnt/[a-z]/* ]]; then extra+=(-e CHOKIDAR_USEPOLLING=1); fi
   docker run -d --rm --name "$name" --init "${FLAGS[@]}" "${extra[@]}"     -v "$(host_path "$src"):$dst" "$ref" sleep infinity >/dev/null
 }
 
@@ -199,21 +206,181 @@ valid_name() {
   [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] && [ "$1" != scratch ]
 }
 
+# --- web templates (run inside the container: they need node + pnpm) ---
+scaffold_web() {
+  local dir="$1" tpl="$2" name; name="$(basename "$dir")"
+  command -v pnpm >/dev/null 2>&1 || die "pnpm not found; templates run inside the devbox container"
+  cd "$dir"
+  mkdir -p src
+  printf '{\n  "name": "%s",\n  "private": true,\n  "type": "module",\n  "scripts": {\n    "dev": "vite",\n    "build": "%s && vite build",\n    "preview": "vite preview --host"\n  }\n}\n' \
+    "$name" "$([ "$tpl" = vue ] && echo 'vue-tsc --noEmit' || echo 'tsc --noEmit')" > package.json
+  printf '%s\n' '@import "tailwindcss";' > src/index.css
+  case "$tpl" in
+    react)
+      pnpm add react react-dom
+      pnpm add -D vite @vitejs/plugin-react typescript @types/react @types/react-dom tailwindcss @tailwindcss/vite
+      cat > vite.config.ts <<'EOF'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+// host: true  -> listen on 0.0.0.0 so the browser on the host can reach the container
+// polling     -> file events do not cross Windows bind mounts; devbox sets CHOKIDAR_USEPOLLING=1 there
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: { host: true, port: 5173, watch: { usePolling: process.env.CHOKIDAR_USEPOLLING === '1' } },
+})
+EOF
+      cat > tsconfig.json <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "DOM", "DOM.Iterable"], "module": "ESNext",
+    "moduleResolution": "bundler", "jsx": "react-jsx", "strict": true, "noEmit": true,
+    "skipLibCheck": true, "isolatedModules": true, "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts"]
+}
+EOF
+      sed 's/__NAME__/'"$name"'/' > index.html <<'EOF'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>__NAME__</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+EOF
+      cat > src/main.tsx <<'EOF'
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+EOF
+      cat > src/App.tsx <<'EOF'
+import { useState } from 'react'
+
+export default function App() {
+  const [count, setCount] = useState(0)
+  return (
+    <main className="min-h-screen grid place-items-center bg-slate-950 text-slate-100">
+      <button
+        className="rounded-lg bg-indigo-500 px-4 py-2 font-medium hover:bg-indigo-400"
+        onClick={() => setCount((c) => c + 1)}
+      >
+        count is {count}
+      </button>
+    </main>
+  )
+}
+EOF
+      ;;
+    vue)
+      pnpm add vue
+      pnpm add -D vite @vitejs/plugin-vue typescript vue-tsc tailwindcss @tailwindcss/vite
+      cat > vite.config.ts <<'EOF'
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import tailwindcss from '@tailwindcss/vite'
+
+// host: true  -> listen on 0.0.0.0 so the browser on the host can reach the container
+// polling     -> file events do not cross Windows bind mounts; devbox sets CHOKIDAR_USEPOLLING=1 there
+export default defineConfig({
+  plugins: [vue(), tailwindcss()],
+  server: { host: true, port: 5173, watch: { usePolling: process.env.CHOKIDAR_USEPOLLING === '1' } },
+})
+EOF
+      cat > tsconfig.json <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "DOM", "DOM.Iterable"], "module": "ESNext",
+    "moduleResolution": "bundler", "strict": true, "noEmit": true,
+    "skipLibCheck": true, "isolatedModules": true, "types": ["vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]
+}
+EOF
+      sed 's/__NAME__/'"$name"'/' > index.html <<'EOF'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>__NAME__</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+EOF
+      cat > src/main.ts <<'EOF'
+import { createApp } from 'vue'
+import './index.css'
+import App from './App.vue'
+
+createApp(App).mount('#app')
+EOF
+      cat > src/App.vue <<'EOF'
+<script setup lang="ts">
+import { ref } from 'vue'
+const count = ref(0)
+</script>
+
+<template>
+  <main class="min-h-screen grid place-items-center bg-slate-950 text-slate-100">
+    <button
+      class="rounded-lg bg-emerald-500 px-4 py-2 font-medium hover:bg-emerald-400"
+      @click="count++"
+    >
+      count is {{ count }}
+    </button>
+  </main>
+</template>
+EOF
+      ;;
+  esac
+}
+
 cmd_new() {
-  local name="" git=0
+  local name="" git=0 tpl=""
+  local orig=("$@")
   while [ $# -gt 0 ]; do
     case "$1" in
       -n|--name) [ $# -ge 2 ] || die "$1 needs a value"; name="$2"; shift 2 ;;
       -g|--git) git=1; shift ;;
+      -t|--template) [ $# -ge 2 ] || die "$1 needs a value"; tpl="$2"; shift 2 ;;
+      --template=*) tpl="${1#--template=}"; shift ;;
       -*) die "new: unknown option '$1'" ;;
       *) [ -z "$name" ] || die "new: more than one name given"; name="$1"; shift ;;
     esac
   done
   [ -n "$name" ] || die "new: project name required (devbox new -n <name> [-g])"
   valid_name "$name" || die "invalid name '$name' (letters, digits, . _ - ; no slashes; 'scratch' is reserved)"
+  case "$tpl" in ""|react|vue) ;; *) die "unknown template '$tpl' (expected: react, vue)" ;; esac
+  if [ -n "$tpl" ] && ! in_container; then
+    # templates need node + pnpm: run the same command inside the container (path printed is the in-container one)
+    need_docker
+    mkdir -p "$PROJECTS"
+    ensure_container "$CONTAINER" "$(image_ref base)" "$PROJECTS" /work 0
+    exec docker exec "${TTY_FLAGS[@]}" -u dev "$CONTAINER" devbox new "${orig[@]}"
+  fi
   local dir="$PROJECTS/$name"
   [ ! -e "$dir" ] || die "$dir already exists"
   mkdir -p "$dir"
+  if [ -n "$tpl" ]; then
+    ( scaffold_web "$dir" "$tpl" ) || die "template '$tpl' failed; $dir was left as is for inspection"
+  fi
   if [ "$git" = 1 ]; then
     (cd "$dir" && git init -q -b main)
     printf '%s\n' '.DS_Store' '.env' '.idea/' '.vscode/' 'node_modules/' '__pycache__/' '.venv/' 'target/' 'build/' 'dist/' > "$dir/.gitignore"
