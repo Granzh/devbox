@@ -6,7 +6,7 @@
 # volume at runtime and would hide anything baked into it.
 
 # FROM tags are literal on purpose: Dependabot reads and bumps them.
-FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 FROM docker:29-cli AS dockercli
 FROM node:24.22.2-bookworm-slim AS node
 
